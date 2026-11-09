@@ -1,0 +1,15 @@
+name: SOM tests
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  som:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node pruebas/verificar_som.cjs
+      - run: python3 desarrollo/generar_html.py
+      - run: git diff --exit-code -- Mapa_Autoorganizado_IA.html

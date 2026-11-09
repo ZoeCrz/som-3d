@@ -1,0 +1,81 @@
+'use strict';
+// Toda la interacción usa el modelo SOM anterior. No hay bibliotecas, CDN ni servidor.
+const $=id=>document.getElementById(id),DEFAULT={epochs:140,size:6,rate:.35,radius:1.3};
+let custom=[],params={...DEFAULT},model=null,selected='a0',generation=0,busy=false;
+// Cada copia portable tiene su propio espacio de guardado; sus ediciones locales
+// prevalecen en reaperturas sin confundirse con otras copias del mismo sitio.
+const stateHash=Array.from($('savedState').textContent).reduce((h,c)=>(Math.imul(h,31)+c.codePointAt(0))>>>0,0).toString(16);
+const STORAGE='zoe-som-animales-v1-'+stateHash;
+const canvas=$('map'),ctx=canvas.getContext('2d'),images={};
+for(const [emoji,src] of Object.entries(EMOJI_ASSETS)){const image=new Image();image.src=src;image.onload=()=>draw();images[emoji]=image;}
+const all=()=>[...SOM.DATA,...custom];
+const text=(tag,value,className='')=>{const e=document.createElement(tag);e.textContent=value;if(className)e.className=className;return e;};
+function icon(emoji){const im=document.createElement('span');im.className='emoji';im.textContent=emoji;im.setAttribute('aria-hidden','true');return im;}
+function message(value,error=false){$('message').textContent=value;$('message').classList.toggle('error',error);}
+function serial(){return {version:2,custom:custom.map(({id,name,choices})=>({id,name,choices})),params:{...params}};}
+// Los archivos importados se validan y nunca se insertan como HTML ejecutable.
+function validate(state){if(!state||![1,2].includes(state.version)||!Array.isArray(state.custom)||state.custom.length>100)throw Error('Formato inválido. Importa un archivo de Guardar datos, con hasta 100 animales nuevos.');SOM.config(state.params);const names=new Set(SOM.DATA.map(a=>a.name.toLocaleLowerCase('es'))),ids=new Set();const valid=state.custom.map(a=>{if(typeof a.name!=='string'||!a.name.trim()||a.name.length>50||typeof a.id!=='string'||!/^nuevo-[\w-]+$/.test(a.id)||ids.has(a.id))throw Error('Nombre o identificador inválido.');const name=a.name.trim(),key=name.toLocaleLowerCase('es');if(names.has(key))throw Error('Hay nombres repetidos.');names.add(key);ids.add(a.id);const choices=Array.isArray(a.choices)?a.choices.slice():a.choices;if(state.version===1&&Array.isArray(choices)){for(const i of [2,5,15,18]){if(!Number.isInteger(choices[i])||choices[i]<0||choices[i]>2)throw Error('Característica inválida.');choices[i]=Number(choices[i]>0);}}return {id:a.id,name,emoji:'⭐',ecosystem:'Agregado por ti',choices,vector:SOM.encode(choices)};});return {custom:valid,params:{...state.params}};}
+function persist(){try{localStorage.setItem(STORAGE,JSON.stringify(serial()));}catch{message('El navegador no permite guardar automáticamente. Usa Guardar datos o Guardar HTML.');}}
+try{const embedded=validate(JSON.parse($('savedState').textContent));let saved=embedded;
+  // La primera apertura usa el estado incorporado; las posteriores recuperan
+  // las ediciones locales de esta misma copia, incluso si se eliminó un animal.
+  try{const legacyHash=Array.from($('savedState').textContent.replace('"version":2','"version":1')).reduce((h,c)=>(Math.imul(h,31)+c.codePointAt(0))>>>0,0).toString(16);const stored=localStorage.getItem(STORAGE)||localStorage.getItem('zoe-som-animales-v1-'+legacyHash);if(stored)saved=validate(JSON.parse(stored));}catch{}
+  custom=saved.custom;params=saved.params;
+}catch(error){message('Se usarán los datos iniciales: '+error.message,true);}
+function syncParams(){for(const k of Object.keys(DEFAULT))$(k).value=params[k];$('seed').value=params.seed??'';}
+syncParams();
+$('featureForm').replaceChildren();
+for(const [i,f] of SOM.FEATURES.entries()){const label=text('label',f.name),hint=text('small',f.hint),select=document.createElement('select');select.id='choice'+i;select.required=true;select.append(new Option('Selecciona una opción',''));f.options.forEach((name,j)=>select.append(new Option(name,String(j))));label.append(hint,select);$('featureForm').append(label);}
+$('starIcon').textContent='⭐';
+function refreshEcosystems(){const current=$('ecosystem').value;$('ecosystem').replaceChildren(new Option('Todos los ecosistemas',''));[...new Set(all().map(a=>a.ecosystem))].sort((a,b)=>a.localeCompare(b,'es')).forEach(v=>$('ecosystem').append(new Option(v,v)));$('ecosystem').value=current;}
+const normalize=s=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+function list(){const q=normalize($('search').value),eco=$('ecosystem').value,rows=all().filter(a=>normalize(a.name).includes(q)&&(!eco||a.ecosystem===eco));$('list').replaceChildren();for(const a of rows){const button=document.createElement('button');button.className='animal-row'+(a.id===selected?' active':'');button.setAttribute('aria-pressed',String(a.id===selected));button.append(icon(a.emoji));const copy=document.createElement('span');copy.append(text('b',a.name),text('small',a.ecosystem));button.append(copy);button.onclick=()=>select(a.id);$('list').append(button);}if(!rows.length)$('list').append(text('p','No se encontraron animales.','muted'));$('animalCount').textContent=all().length;$('mapCount').textContent=all().length+' animales';}
+function select(id){selected=id;list();details();draw();}
+function hit(a){return model?SOM.bmu(a.vector,model):null;}
+function coordinates(h){return model.nodes[h.index].map(x=>x+.5);}
+function details(){const a=all().find(a=>a.id===selected)||SOM.DATA[0];selected=a.id;const root=$('details');root.replaceChildren();const top=text('div','','detailtop'),identity=text('div','','identity'),copy=document.createElement('div');identity.append(icon(a.emoji));copy.append(text('div','ANIMAL SELECCIONADO','eyebrow'),text('h2',a.name),text('div',a.ecosystem,'muted'));const h=hit(a);copy.append(text('span',h?'Posición · '+coordinates(h).map((v,i)=>'XYZ'[i]+' '+v).join('   '):'Entrenando el mapa…','coords'));identity.append(copy);top.append(identity);
+ const related=text('div','','related');related.append(text('h3','Sus parecidos más cercanos'));const grid=text('div','','related-grid');all().filter(v=>v.id!==a.id).map(v=>({a:v,d:Math.sqrt(SOM.distance(a.vector,v.vector)/20)})).sort((x,y)=>x.d-y.d).slice(0,3).forEach(({a:b,d})=>{const button=document.createElement('button');button.append(icon(b.emoji),text('b',b.name),text('small','Distancia '+d.toFixed(3)));button.onclick=()=>select(b.id);grid.append(button);});related.append(grid);top.append(related);root.append(top);
+ const disclosure=document.createElement('details');disclosure.append(text('summary','Ver sus 20 características'));const traits=text('div','','traits');SOM.FEATURES.forEach((f,i)=>{const item=text('div','','trait');item.append(text('b',f.name),text('small',f.options[a.choices[i]]+' · '+a.vector[i].toFixed(2)));traits.append(item);});disclosure.append(traits);root.append(disclosure);
+ if(a.emoji==='⭐'){const remove=text('button','Eliminar este animal');remove.style.marginTop='15px';remove.onclick=()=>{custom=custom.filter(v=>v.id!==a.id);selected='a0';persist();refreshEcosystems();list();details();draw();message('Animal eliminado. Puedes volver a agregarlo; reentrena para retirar su influencia del modelo.');};root.append(remove);}
+}
+async function retrain(){const token=++generation;busy=true;model=null;$('classifyButton').disabled=true;$('progress').value=0;$('status').textContent='Entrenando…';details();draw();const trainingAnimals=all();
+ try{const result=await SOM.train(trainingAnimals.map(a=>a.vector),params,p=>{if(token===generation){$('progress').value=p*100;$('status').textContent='Entrenando… '+Math.round(p*100)+' %';}},()=>token!==generation);if(token!==generation)return;model=result;const m=SOM.evaluate(trainingAnimals.map(a=>a.vector),model);$('status').textContent='Listo para explorar · '+m.occupied+' neuronas ocupadas';details();draw();message('');persist();
+ }catch(error){if(token===generation){$('status').textContent='No se pudo entrenar';message(error.message,true);}}finally{if(token===generation){busy=false;$('classifyButton').disabled=!model;}}
+}
+// Proyección de un espacio tridimensional real al canvas. Solo gira la cámara.
+let yaw=-.65,pitch=.38,zoom=1,width=1,height=1,points=[],drag=null;
+function project(p){let [x,y,z]=p.map(v=>v/params.size-.5);const rx=x*Math.cos(yaw)+z*Math.sin(yaw),rz=-x*Math.sin(yaw)+z*Math.cos(yaw),ry=y*Math.cos(pitch)-rz*Math.sin(pitch),depth=y*Math.sin(pitch)+rz*Math.cos(pitch),scale=Math.min(width*.58,height*.53)*zoom,perspective=3.2/(3.2+depth);return {x:width/2+rx*scale*perspective,y:height/2-ry*scale*perspective,z:depth};}
+function line(a,b,color='#ccdac0',lineWidth=1){const p=project(a),q=project(b);ctx.strokeStyle=color;ctx.lineWidth=lineWidth;ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.stroke();}
+function rounded(x,y,w,h,r){ctx.beginPath();ctx.roundRect(x,y,w,h,r);}
+function draw(){if(!ctx)return;ctx.clearRect(0,0,width,height);const s=params.size;
+ // Grilla de las caras del cubo, con coordenadas 0..size. Neuronas en centros i+0.5.
+ for(let i=0;i<=s;i++){line([i,0,0],[i,0,s],'#e1e9d9');line([0,0,i],[s,0,i],'#e1e9d9');line([0,i,0],[0,i,s],'#e1e9d9');line([0,0,i],[0,s,i],'#e1e9d9');line([i,0,0],[i,s,0],'#e1e9d9');line([0,i,0],[s,i,0],'#e1e9d9');}
+ for(let axis=0;axis<3;axis++)for(let a=0;a<2;a++)for(let b=0;b<2;b++){const p=[0,0,0],q=[0,0,0];p[(axis+1)%3]=q[(axis+1)%3]=a*s;p[(axis+2)%3]=q[(axis+2)%3]=b*s;q[axis]=s;line(p,q,'#b8caaa',1.4);}
+ ctx.font='600 12px -apple-system,Arial';ctx.fillStyle='#5f7d51';[[s,0,0],[0,s,0],[0,0,s]].forEach((p,i)=>{const v=project(p);ctx.fillText('XYZ'[i]+' '+s,v.x+8,v.y-8);});
+ if(!model){ctx.fillStyle='#6a8171';ctx.font='14px -apple-system,Arial';ctx.textAlign='center';ctx.fillText('Aprendiendo los 20 rasgos…',width/2,height/2);ctx.textAlign='left';points=[];return;}
+ const groups=new Map();for(const animal of all()){const h=hit(animal);if(!groups.has(h.index))groups.set(h.index,[]);groups.get(h.index).push(animal);}
+ points=[...groups.entries()].map(([index,animals])=>{const animal=animals.find(a=>a.id===selected)||animals[0];return {index,animals,animal,...project(model.nodes[index].map(v=>v+.5))};}).sort((a,b)=>Number(a.animals.some(v=>v.id===selected))-Number(b.animals.some(v=>v.id===selected))||b.z-a.z);
+ for(const p of points){const chosen=p.animals.some(a=>a.id===selected),size=chosen?44:36;ctx.save();ctx.shadowColor='#173b3320';ctx.shadowBlur=8;ctx.shadowOffsetY=3;ctx.fillStyle=chosen?'#e6f2db':'#ffffffed';rounded(p.x-size/2,p.y-size/2,size,size,11);ctx.fill();ctx.shadowBlur=0;ctx.shadowOffsetY=0;ctx.strokeStyle=chosen?'#2b7756':'#e1e8d7';ctx.lineWidth=chosen?2:1;ctx.stroke();const im=images[p.animal.emoji];if(im&&im.complete)ctx.drawImage(im,p.x-16,p.y-16,32,32);else{ctx.font='28px sans-serif';ctx.textAlign='center';ctx.fillText(p.animal.emoji,p.x,p.y+10);ctx.textAlign='left';}if(p.animals.length>1){ctx.fillStyle='#3f674c';ctx.beginPath();ctx.arc(p.x+size/2-2,p.y-size/2+1,9,0,Math.PI*2);ctx.fill();ctx.fillStyle='white';ctx.textAlign='center';ctx.font='bold 11px Arial';ctx.fillText(p.animals.length,p.x+size/2-2,p.y-size/2+5);ctx.textAlign='left';}ctx.restore();}
+}
+function resize(){const rect=canvas.getBoundingClientRect(),dpr=Math.min(window.devicePixelRatio||1,2);width=rect.width;height=rect.height;canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);draw();}
+new ResizeObserver(resize).observe(canvas);
+canvas.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,startX:e.clientX,startY:e.clientY,moved:false};canvas.setPointerCapture(e.pointerId);});
+canvas.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.hypot(e.clientX-drag.startX,e.clientY-drag.startY)>4)drag.moved=true;yaw+=dx*.008;pitch=Math.max(-1.2,Math.min(1.2,pitch+dy*.008));drag.x=e.clientX;drag.y=e.clientY;draw();});
+canvas.addEventListener('pointerup',e=>{if(drag&&!drag.moved){const rect=canvas.getBoundingClientRect(),x=e.clientX-rect.left,y=e.clientY-rect.top;const p=points.slice().reverse().find(p=>Math.abs(p.x-x)<24&&Math.abs(p.y-y)<24);if(p){const current=p.animals.findIndex(a=>a.id===selected);select(p.animals[(current+1)%p.animals.length].id);}}drag=null;});canvas.addEventListener('pointercancel',()=>drag=null);
+function zoomBy(f){zoom=Math.max(.55,Math.min(1.65,zoom*f));draw();}
+canvas.addEventListener('wheel',e=>{e.preventDefault();zoomBy(e.deltaY<0?1.06:.94);},{passive:false});
+canvas.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','+','=','-'].includes(e.key)){e.preventDefault();if(e.key==='ArrowLeft')yaw-=.1;if(e.key==='ArrowRight')yaw+=.1;if(e.key==='ArrowUp')pitch=Math.min(1.2,pitch+.1);if(e.key==='ArrowDown')pitch=Math.max(-1.2,pitch-.1);if(e.key==='+'||e.key==='=')zoomBy(1.1);if(e.key==='-')zoomBy(.9);draw();}});
+$('zoomIn').onclick=()=>zoomBy(1.1);$('zoomOut').onclick=()=>zoomBy(.9);$('resetView').onclick=()=>{yaw=-.65;pitch=.38;zoom=1;draw();};
+$('search').oninput=list;$('ecosystem').onchange=list;
+$('openParams').onclick=()=>{syncParams();$('paramError').textContent='';$('paramsDialog').showModal();};$('openAnimal').onclick=()=>{$('animalError').textContent='';$('animalDialog').showModal();};
+document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).close());
+$('defaultParams').onclick=()=>{for(const k in DEFAULT)$(k).value=DEFAULT[k];$('seed').value='';};
+$('paramsForm').onsubmit=e=>{e.preventDefault();try{const proposed=Object.fromEntries(Object.keys(DEFAULT).map(k=>[k,Number($(k).value)]));if($('seed').value!=='')proposed.seed=Number($('seed').value);SOM.config(proposed);params=proposed;persist();$('paramsDialog').close();message('Entrenando con los nuevos parámetros…');retrain();}catch(error){$('paramError').textContent=error.message;}};
+$('animalForm').onsubmit=e=>{e.preventDefault();try{if(!model||busy)throw Error('Espera a que termine el entrenamiento.');if(custom.length>=100)throw Error('Se permiten hasta 100 animales agregados.');const name=$('newName').value.trim();if(!name)throw Error('Escribe el nombre.');if(all().some(a=>normalize(a.name)===normalize(name)))throw Error('Ya existe un animal con ese nombre.');const choices=SOM.FEATURES.map((_,i)=>Number($('choice'+i).value));const animal={id:'nuevo-'+Date.now()+'-'+custom.length,name,emoji:'⭐',ecosystem:'Agregado por ti',choices,vector:SOM.encode(choices)};custom.push(animal);persist();refreshEcosystems();$('search').value='';$('ecosystem').value='';select(animal.id);$('animalDialog').close();$('animalForm').reset();message('Se agregó '+name+' con ⭐. Se clasificó sobre el mapa actual; reentrenar lo incorpora al aprendizaje.');}catch(error){$('animalError').textContent=error.message;}};
+$('animalForm').onreset=()=>{$('animalError').textContent='';};
+function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+$('exportData').onclick=()=>{download(new Blob([JSON.stringify(serial(),null,2)],{type:'application/json'}),'animales_guardados.json');message('Datos preparados para descargar.');};
+$('exportHtml').onclick=()=>{const clone=document.documentElement.cloneNode(true);for(const id of ['list','featureForm','details'])clone.querySelector('#'+id).replaceChildren();clone.querySelector('#starIcon').removeAttribute('src');clone.querySelector('#savedState').textContent=JSON.stringify(serial()).replace(/</g,'\\u003c');clone.querySelectorAll('dialog').forEach(d=>d.removeAttribute('open'));download(new Blob(['<!doctype html>\n'+clone.outerHTML],{type:'text/html;charset=utf-8'}),'mapa_animales_compartido.html');message('Copia del HTML preparada con tus animales y parámetros.');};
+$('importData').onclick=()=>$('fileInput').click();
+$('fileInput').onchange=async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>250000)throw Error('El archivo es demasiado grande.');const state=validate(JSON.parse(await file.text()));custom=state.custom;params=state.params;selected='a0';persist();syncParams();refreshEcosystems();list();message('Datos importados. Se está entrenando el mapa.');retrain();}catch(error){message('No se importaron los datos: '+error.message,true);}finally{e.target.value='';}};
+refreshEcosystems();list();details();resize();retrain();
