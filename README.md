@@ -1,6 +1,6 @@
 # SOM 3D: mapa autoorganizado de animales
 
-Autora de la versión interactiva: **Zoe Yeray Cruz Cruz**.
+Autor de la versión interactiva: **Zoe Yeray Cruz Cruz**.
 
 Abre **Mapa_Autoorganizado_IA.html** con doble clic y espera a que aparezca **Listo para explorar**. Si el sistema abre un editor de texto, haz clic derecho y elige **Abrir con → Google Chrome, Safari, Edge o Firefox**.
 
